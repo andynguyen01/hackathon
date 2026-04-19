@@ -1,0 +1,226 @@
+#include <Servo.h>
+#include <NeoPixelConnect.h>
+
+// ================= PIN SETUP =================
+
+// Fixed sensors
+#define trigF1 2
+#define echoF1 3
+
+#define trigF2 4
+#define echoF2 5
+
+// Servo sensors
+#define trigS1 6
+#define echoS1 7
+#define servoPin1 8
+
+#define trigS2 10
+#define echoS2 11
+#define servoPin2 9
+
+// LEDs
+#define RED 12
+#define YELLOW 13
+#define GREEN 14
+
+// LED Strip
+#define LED_STRIP_PIN 15
+#define NUM_LEDS 7
+
+NeoPixelConnect strip(LED_STRIP_PIN, NUM_LEDS);
+
+Servo servo1;
+Servo servo2;
+
+// ================= SETTINGS =================
+const float ACTIVATION_DIST = 100.0;
+const float DANGER_DIST = 10.0;
+
+int angle1 = 30;
+int angle2 = 150;
+
+int step1 = 10;
+int step2 = -10;
+
+unsigned long lastServoMove = 0;
+const unsigned long servoInterval = 250;
+
+unsigned long lastBTTime = 0;
+const unsigned long btInterval = 800;
+
+// ================= DISTANCES =================
+float fixed1 = 999.0;
+float fixed2 = 999.0;
+float servoDist1 = 999.0;
+float servoDist2 = 999.0;
+
+bool frontActive = false;
+bool backActive = false;
+
+// ================= FUNCTIONS =================
+float getDistance(int trig, int echo) {
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+
+  long duration = pulseIn(echo, HIGH, 30000);
+
+  if (duration == 0) return 999.0;
+
+  return duration * 0.0343 / 2.0;
+}
+
+String getZoneStatus(bool active, float dist) {
+  if (!active) return "SCANNING";
+  if (dist <= DANGER_DIST) return "DANGER";
+  return "OBJECT DETECTED";
+}
+
+String getOverallStatus(String front, String back) {
+  if (front == "DANGER" || back == "DANGER") return "DANGER";
+  if (front == "OBJECT DETECTED" || back == "OBJECT DETECTED") return "OBJECT DETECTED";
+  return "SCANNING";
+}
+
+void setLEDs(String status) {
+  if (status == "DANGER") {
+    digitalWrite(RED, HIGH);
+    digitalWrite(YELLOW, LOW);
+    digitalWrite(GREEN, LOW);
+  } 
+  else if (status == "OBJECT DETECTED") {
+    digitalWrite(RED, LOW);
+    digitalWrite(YELLOW, HIGH);
+    digitalWrite(GREEN, LOW);
+  } 
+  else {
+    digitalWrite(RED, LOW);
+    digitalWrite(YELLOW, LOW);
+    digitalWrite(GREEN, HIGH);
+  }
+}
+
+void clearStrip() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    strip.neoPixelSetValue(i, 0, 0, 0, false);
+  }
+  strip.neoPixelShow();
+}
+
+void redStripOn() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    strip.neoPixelSetValue(i, 255, 0, 0, false);
+  }
+  strip.neoPixelShow();
+}
+
+// ================= SETUP =================
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(9600);
+
+  pinMode(trigF1, OUTPUT);
+  pinMode(echoF1, INPUT);
+
+  pinMode(trigF2, OUTPUT);
+  pinMode(echoF2, INPUT);
+
+  pinMode(trigS1, OUTPUT);
+  pinMode(echoS1, INPUT);
+
+  pinMode(trigS2, OUTPUT);
+  pinMode(echoS2, INPUT);
+
+  pinMode(RED, OUTPUT);
+  pinMode(YELLOW, OUTPUT);
+  pinMode(GREEN, OUTPUT);
+
+  servo1.attach(servoPin1);
+  servo2.attach(servoPin2);
+
+  servo1.write(angle1);
+  servo2.write(angle2);
+
+  clearStrip();
+
+  delay(1000);
+
+  Serial.println("System started");
+  Serial1.println("HM-10 connected");
+}
+
+// ================= LOOP =================
+void loop() {
+  if (millis() - lastServoMove >= servoInterval) {
+    lastServoMove = millis();
+
+    angle1 += step1;
+    angle2 += step2;
+
+    if (angle1 >= 150 || angle1 <= 30) step1 = -step1;
+    if (angle2 >= 150 || angle2 <= 30) step2 = -step2;
+
+    servo1.write(angle1);
+    servo2.write(angle2);
+
+    delay(120);
+
+    servoDist1 = getDistance(trigS1, echoS1);
+    delay(20);
+
+    servoDist2 = getDistance(trigS2, echoS2);
+    delay(20);
+  }
+
+  if (servoDist1 < ACTIVATION_DIST) {
+    frontActive = true;
+    fixed1 = getDistance(trigF1, echoF1);
+  } else {
+    frontActive = false;
+    fixed1 = 999.0;
+  }
+
+  if (servoDist2 < ACTIVATION_DIST) {
+    backActive = true;
+    fixed2 = getDistance(trigF2, echoF2);
+  } else {
+    backActive = false;
+    fixed2 = 999.0;
+  }
+
+  String frontStatus = getZoneStatus(frontActive, fixed1);
+  String backStatus = getZoneStatus(backActive, fixed2);
+  String overallStatus = getOverallStatus(frontStatus, backStatus);
+
+  setLEDs(overallStatus);
+
+  if (overallStatus == "DANGER") {
+    redStripOn();
+  } else {
+    clearStrip();
+  }
+
+  Serial.print("Front: ");
+  Serial.print(frontStatus);
+  Serial.print(" | Back: ");
+  Serial.print(backStatus);
+  Serial.print(" | Overall: ");
+  Serial.println(overallStatus);
+
+  if (millis() - lastBTTime >= btInterval) {
+    lastBTTime = millis();
+
+    Serial1.print("Front=");
+    Serial1.print(frontStatus);
+    Serial1.print(",Back=");
+    Serial1.print(backStatus);
+    Serial1.print(",Overall=");
+    Serial1.println(overallStatus);
+  }
+
+  delay(100);
+}
