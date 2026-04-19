@@ -1,8 +1,6 @@
 #include <Servo.h>
 #include <NeoPixelConnect.h>
 
-// ================= PIN SETUP =================
-
 // Fixed sensors
 #define trigF1 2
 #define echoF1 3
@@ -28,14 +26,22 @@
 #define LED_STRIP_PIN 15
 #define NUM_LEDS 7
 
+// Buzzer
+#define BUZZER 16
+
 NeoPixelConnect strip(LED_STRIP_PIN, NUM_LEDS);
 
 Servo servo1;
 Servo servo2;
 
-// ================= SETTINGS =================
+// Settings
 const float ACTIVATION_DIST = 100.0;
 const float DANGER_DIST = 10.0;
+
+const unsigned long servoInterval = 250;
+const unsigned long btInterval = 800;
+const unsigned long distressDelay = 10000;   // 10 seconds
+const unsigned long countdownPrintInterval = 1000;
 
 int angle1 = 30;
 int angle2 = 150;
@@ -43,13 +49,16 @@ int angle2 = 150;
 int step1 = 10;
 int step2 = -10;
 
+// Timers
 unsigned long lastServoMove = 0;
-const unsigned long servoInterval = 250;
-
 unsigned long lastBTTime = 0;
-const unsigned long btInterval = 800;
+unsigned long lastCountdownPrint = 0;
 
-// ================= DISTANCES =================
+unsigned long redStartTime = 0;
+bool redTimerRunning = false;
+bool distressSent = false;
+
+// Distances
 float fixed1 = 999.0;
 float fixed2 = 999.0;
 float servoDist1 = 999.0;
@@ -58,7 +67,6 @@ float servoDist2 = 999.0;
 bool frontActive = false;
 bool backActive = false;
 
-// ================= FUNCTIONS =================
 float getDistance(int trig, int echo) {
   digitalWrite(trig, LOW);
   delayMicroseconds(2);
@@ -70,24 +78,28 @@ float getDistance(int trig, int echo) {
   long duration = pulseIn(echo, HIGH, 30000);
 
   if (duration == 0) return 999.0;
-
   return duration * 0.0343 / 2.0;
 }
 
 String getZoneStatus(bool active, float dist) {
   if (!active) return "SCANNING";
-  if (dist <= DANGER_DIST) return "DANGER";
+  if (dist <= DANGER_DIST) return "RED_TRIGGER";
   return "OBJECT DETECTED";
 }
 
 String getOverallStatus(String front, String back) {
-  if (front == "DANGER" || back == "DANGER") return "DANGER";
+  if (front == "RED_TRIGGER" || back == "RED_TRIGGER") return "RED_TRIGGER";
   if (front == "OBJECT DETECTED" || back == "OBJECT DETECTED") return "OBJECT DETECTED";
   return "SCANNING";
 }
 
 void setLEDs(String status) {
   if (status == "DANGER") {
+    digitalWrite(RED, HIGH);
+    digitalWrite(YELLOW, LOW);
+    digitalWrite(GREEN, LOW);
+  } 
+  else if (status == "WARNING") {
     digitalWrite(RED, HIGH);
     digitalWrite(YELLOW, LOW);
     digitalWrite(GREEN, LOW);
@@ -118,7 +130,6 @@ void redStripOn() {
   strip.neoPixelShow();
 }
 
-// ================= SETUP =================
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600);
@@ -139,6 +150,9 @@ void setup() {
   pinMode(YELLOW, OUTPUT);
   pinMode(GREEN, OUTPUT);
 
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+
   servo1.attach(servoPin1);
   servo2.attach(servoPin2);
 
@@ -153,7 +167,6 @@ void setup() {
   Serial1.println("HM-10 connected");
 }
 
-// ================= LOOP =================
 void loop() {
   if (millis() - lastServoMove >= servoInterval) {
     lastServoMove = millis();
@@ -194,14 +207,66 @@ void loop() {
 
   String frontStatus = getZoneStatus(frontActive, fixed1);
   String backStatus = getZoneStatus(backActive, fixed2);
-  String overallStatus = getOverallStatus(frontStatus, backStatus);
+  String rawOverall = getOverallStatus(frontStatus, backStatus);
+
+  String overallStatus = rawOverall;
+
+  if (rawOverall == "RED_TRIGGER") {
+    if (!redTimerRunning) {
+      redTimerRunning = true;
+      distressSent = false;
+      redStartTime = millis();
+      lastCountdownPrint = 0;
+
+      Serial.println("Red trigger detected. Starting 10 second countdown...");
+      Serial1.println("Red trigger detected. Starting 10 second countdown...");
+    }
+
+    unsigned long elapsed = millis() - redStartTime;
+    int countdown = 10 - (elapsed / 1000);
+    if (countdown < 0) countdown = 0;
+
+    if (elapsed >= distressDelay) {
+      overallStatus = "DANGER";
+
+      if (!distressSent) {
+        distressSent = true;
+        Serial.println("DISTRESS SIGNAL SENT");
+        Serial1.println("DISTRESS SIGNAL SENT");
+      }
+    } else {
+      overallStatus = "WARNING";
+
+      if (millis() - lastCountdownPrint >= countdownPrintInterval) {
+        lastCountdownPrint = millis();
+
+        Serial.print("Countdown: ");
+        Serial.println(countdown);
+
+        Serial1.print("Countdown: ");
+        Serial1.println(countdown);
+      }
+    }
+  } else {
+    if (redTimerRunning) {
+      Serial.println("Red trigger cleared. Countdown reset.");
+      Serial1.println("Red trigger cleared. Countdown reset.");
+    }
+
+    redTimerRunning = false;
+    distressSent = false;
+    redStartTime = 0;
+    lastCountdownPrint = 0;
+  }
 
   setLEDs(overallStatus);
 
   if (overallStatus == "DANGER") {
     redStripOn();
+    digitalWrite(BUZZER, HIGH);
   } else {
     clearStrip();
+    digitalWrite(BUZZER, LOW);
   }
 
   Serial.print("Front: ");
